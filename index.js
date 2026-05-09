@@ -3,6 +3,27 @@ const { DATABASE, VERSION } = require('./config');
 const http = require('http');
 
 // ------------------------------------------------------------------
+// GLOBAL: Suppress simple-git errors caused by missing .git folder
+// These happen because Railway/Docker doesn't include the .git directory
+// ------------------------------------------------------------------
+process.on('unhandledRejection', (reason) => {
+  if (reason && reason.message && reason.message.includes('not a git repository')) {
+    // Silently ignore git-related errors
+    return;
+  }
+  // Log anything else but don't crash
+  logger.warn({ err: reason }, 'Unhandled rejection (non-git)');
+});
+
+process.on('uncaughtException', (err) => {
+  if (err && err.message && err.message.includes('not a git repository')) {
+    return;
+  }
+  logger.error({ err }, 'Uncaught exception');
+  process.exit(1);
+});
+
+// ------------------------------------------------------------------
 // Helper: Start server with port-fallback
 // ------------------------------------------------------------------
 const startServer = (port) => {
@@ -57,6 +78,7 @@ const start = async () => {
   const bot = new Client();
   try {
     await bot.connect();
+    logger.info('Bot connected successfully');
   } catch (error) {
     logger.error({ msg: 'Bot client failed to start', error: error.message });
     process.exit(1);
