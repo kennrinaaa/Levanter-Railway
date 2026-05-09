@@ -2,33 +2,54 @@ const { Client, logger } = require('./lib/client');
 const { DATABASE, VERSION } = require('./config');
 const http = require('http');
 
-// Health-check server so Railway knows the container is alive
-const PORT = process.env.PORT || 3000;
-const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('OK');
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(`Levanter v${VERSION} is running`);
-  }
-});
-server.listen(PORT, () => {
-  logger.info(`Health server listening on port ${PORT}`);
-});
+// ------------------------------------------------------------------
+// Helper: Start server with port-fallback
+// ------------------------------------------------------------------
+const startServer = (port) => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('OK');
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(`Levanter v${VERSION} is running`);
+    }
+  });
 
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.warn(`Port ${port} in use, trying ${port + 1}...`);
+      startServer(port + 1);
+    } else {
+      logger.error({ msg: 'Server error', error: err.message });
+    }
+  });
+
+  server.listen(port, () => {
+    logger.info(`Health server listening on port ${port}`);
+  });
+
+  return server;
+};
+
+// Start health server
+const PORT = parseInt(process.env.PORT || '3000', 10);
+startServer(PORT);
+
+// ------------------------------------------------------------------
 // Bot startup
+// ------------------------------------------------------------------
 const start = async () => {
   logger.info(`Levanter ${VERSION}`);
 
   // Test database connection
   try {
     await DATABASE.authenticate({ retry: { max: 3 } });
+    logger.info('Database connected');
   } catch (error) {
     logger.error({
       msg: 'Database connection failed',
       error: error.message,
-      url: process.env.DATABASE_URL,
     });
     process.exit(1);
   }
@@ -43,7 +64,9 @@ const start = async () => {
   return bot;
 };
 
+// ------------------------------------------------------------------
 // Graceful shutdown
+// ------------------------------------------------------------------
 const shutdown = async (bot) => {
   try {
     if (bot) await bot.close();
@@ -55,7 +78,9 @@ const shutdown = async (bot) => {
   }
 };
 
+// ------------------------------------------------------------------
 // Entry point
+// ------------------------------------------------------------------
 const init = async () => {
   const bot = await start();
   process.on('SIGINT', () => shutdown(bot));
