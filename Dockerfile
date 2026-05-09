@@ -1,7 +1,7 @@
 FROM node:20
 
-# Install ffmpeg and git
-RUN apt-get update && apt-get install -y ffmpeg git && rm -rf /var/lib/apt/lists/*
+# Install only ffmpeg (git not needed — we handle the error in code)
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY package.json yarn.lock ./
 # Install dependencies (postinstall handles sharp)
 RUN yarn install --frozen-lockfile
 
-# Copy the rest of the app INCLUDING .git folder
+# Copy the rest of the app
 COPY . .
 
 # Railway sets PORT; expose 3000 as fallback
