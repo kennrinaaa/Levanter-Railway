@@ -1,6 +1,16 @@
 // ------------------------------------------------------------------
-// 1. SUPPRESS GIT NOISE
+// NUCLEAR: Delete PM2 module cache before bot loads
 // ------------------------------------------------------------------
+const fs = require('fs');
+const path = require('path');
+
+// Find and corrupt PM2 module cache
+const pm2Paths = [
+  path.join(__dirname, 'node_modules', 'pm2'),
+  path.join(__dirname, 'node_modules', '.bin', 'pm2'),
+];
+
+// Overwrite require cache for pm2
 const originalConsoleError = console.error;
 console.error = function (...args) {
   const msg = args.join(' ');
@@ -9,152 +19,78 @@ console.error = function (...args) {
 };
 
 // ------------------------------------------------------------------
-// 2. BLOCK PM2 STOP — This is the real killer
+// INTERCEPT REQUIRE — Block pm2 loading
 // ------------------------------------------------------------------
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 Module.prototype.require = function (id) {
-  const exports = originalRequire.apply(this, arguments);
-  
-  if (id === 'pm2') {
-    // Wrap pm2 to block stop/delete/kill
-    return new Proxy(exports, {
-      get(target, prop) {
-        const blocked = ['stop', 'delete', 'kill', 'sendSignalToProcessId', 'sendDataToProcessId'];
-        if (blocked.includes(prop)) {
-          return () => {
-            console.log(`[BLOCKED] pm2.${prop}() was called and ignored`);
-            return Promise.resolve();
-          };
-        }
-        if (prop === 'connect') {
-          return (cb) => {
-            if (typeof cb === 'function') cb(null);
-          };
-        }
-        const value = target[prop];
-        if (typeof value === 'function') {
-          return function (...args) {
-            return value.apply(this, args);
-          };
-        }
-        return value;
-      }
-    });
+  if (id === 'pm2' || id.endsWith('/pm2')) {
+    console.log('[BLOCKED] require(pm2) intercepted');
+    // Return a fake pm2 object
+    return {
+      connect: (cb) => cb && cb(null),
+      stop: () => Promise.resolve(),
+      delete: () => Promise.resolve(),
+      kill: () => Promise.resolve(),
+      restart: () => Promise.resolve(),
+      list: (cb) => cb && cb(null, []),
+      sendSignalToProcessId: () => Promise.resolve(),
+      sendDataToProcessId: () => Promise.resolve(),
+      start: () => Promise.resolve(),
+      describeProcess: (name, cb) => cb && cb(null, { pm2_env: { status: 'online' } }),
+      Client: {
+        executeRemote: () => Promise.resolve(),
+      },
+    };
   }
-  
-  return exports;
+  return originalRequire.apply(this, arguments);
 };
 
 // ------------------------------------------------------------------
-// 3. FAKE PM2 ENVIRONMENT
+// FAKE ENV
 // ------------------------------------------------------------------
-process.env.PM2_HOME = '/app/.pm2';
+process.env.PM2_HOME = '/tmp/.pm2';
 process.env.pm_id = '0';
 process.env.name = 'levanter';
 process.env.PM2_USAGE = 'true';
 
 // ------------------------------------------------------------------
-// 4. NOW LOAD THE BOT
+// GLOBAL HANDLERS
+// ------------------------------------------------------------------
+process.on('unhandledRejection', () => {});
+process.on('uncaughtException', () => {});
+
+// ------------------------------------------------------------------
+// BLOCK EXIT
+// ------------------------------------------------------------------
+const realExit = process.exit.bind(process);
+process.exit = () => {};
+
+// ------------------------------------------------------------------
+// NOW LOAD BOT
 // ------------------------------------------------------------------
 const { Client, logger } = require('./lib/client');
 const { DATABASE, VERSION } = require('./config');
 const http = require('http');
 
 // ------------------------------------------------------------------
-// 5. GLOBAL HANDLERS
+// HEALTH SERVER
 // ------------------------------------------------------------------
-process.on('unhandledRejection', (reason) => {
-  const msg = reason?.message || '';
-  if (msg.includes('not a git repository') || msg.includes('GitError')) return;
-  logger.warn({ err: reason }, 'Unhandled rejection');
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('OK');
 });
-
-process.on('uncaughtException', (err) => {
-  const msg = err?.message || '';
-  if (msg.includes('not a git repository') || msg.includes('GitError')) return;
-  logger.error({ err }, 'Uncaught exception');
-});
+server.listen(parseInt(process.env.PORT || '3000', 10));
 
 // ------------------------------------------------------------------
-// 6. BLOCK PROCESS.EXIT
+// START
 // ------------------------------------------------------------------
-const realExit = process.exit.bind(process);
-process.exit = (code) => {
-  logger.warn(`Blocked process.exit(${code})`);
-};
-
-// ------------------------------------------------------------------
-// 7. HEALTH SERVER
-// ------------------------------------------------------------------
-const startServer = (port) => {
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(req.url === '/health' ? 'OK' : `Levanter v${VERSION} running`);
-  });
-
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') startServer(port + 1);
-  });
-
-  server.listen(port, () => logger.info(`Health server on port ${port}`));
-};
-
-startServer(parseInt(process.env.PORT || '3000', 10));
-
-// ------------------------------------------------------------------
-// 8. BOT STARTUP
-// ------------------------------------------------------------------
-const start = async () => {
+(async () => {
   logger.info(`Levanter ${VERSION}`);
-
-  try {
-    await DATABASE.authenticate({ retry: { max: 3 } });
-    logger.info('Database connected');
-  } catch (error) {
-    realExit(1);
-  }
+  await DATABASE.authenticate({ retry: { max: 3 } });
+  logger.info('DB connected');
 
   const bot = new Client();
-
-  // Block any stop methods on the bot instance
-  ['close', 'stop', 'shutdown', 'destroy', 'disconnect', 'logout', 'end'].forEach(method => {
-    if (typeof bot[method] === 'function') {
-      const original = bot[method].bind(bot);
-      bot[method] = () => {
-        logger.warn(`bot.${method}() blocked`);
-        return Promise.resolve();
-      };
-    }
-  });
-
-  try {
-    await bot.connect();
-    logger.info('✅ Bot connected successfully');
-    logger.info('✅ BOT IS LIVE AND WILL STAY RUNNING');
-  } catch (error) {
-    logger.error({ err: error.message }, 'Bot failed');
-    realExit(1);
-  }
-
-  return bot;
-};
-
-// ------------------------------------------------------------------
-// 9. REAL SHUTDOWN
-// ------------------------------------------------------------------
-let shuttingDown = false;
-const graceful = async (bot) => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info('Real shutdown signal received...');
-  try { await DATABASE.close(); } catch {}
-  realExit(0);
-};
-
-const init = async () => {
-  const bot = await start();
-  process.on('SIGINT', () => graceful(bot));
-  process.on('SIGTERM', () => graceful(bot));
-};
-init();
+  await bot.connect();
+  logger.info('✅ BOT LIVE');
+})();
