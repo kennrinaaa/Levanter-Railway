@@ -1,57 +1,54 @@
-const { Sequelize } = require('sequelize')
-const { existsSync } = require('fs')
-const path = require('path')
-const configPath = path.join(__dirname, './config.env')
-const databasePath = path.join(__dirname, './database.db')
-if (existsSync(configPath)) require('dotenv').config({ path: configPath })
-const toBool = (x) => x == 'true'
-const DATABASE_URL =
-  process.env.DATABASE_URL === undefined ? databasePath : process.env.DATABASE_URL
+const { Sequelize } = require('sequelize');
+const { existsSync } = require('fs');
+const path = require('path');
+
+// Load config.env if it exists
+const configPath = path.join(__dirname, './config.env');
+if (existsSync(configPath)) require('dotenv').config({ path: configPath });
+
+const databasePath = path.join(__dirname, './database.db');
+const toBool = (x) => x === 'true';
+
+// Railway detection
+const isRailway = process.env.RAILWAY_ENVIRONMENT === 'production' ||
+                  (process.env.RAILWAY_PUBLIC_DOMAIN || '').includes('.railway.app');
+
+// Database setup
+const DATABASE_URL = process.env.DATABASE_URL === undefined
+  ? databasePath
+  : process.env.DATABASE_URL;
+
+const DATABASE = DATABASE_URL === databasePath
+  ? new Sequelize({
+      dialect: 'sqlite',
+      storage: DATABASE_URL,
+      logging: false,
+      retry: { max: 10 },
+      pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
+      dialectOptions: { busyTimeout: 10000 },
+      hooks: {
+        afterConnect: (conn) => {
+          conn.run('PRAGMA synchronous = NORMAL;');
+          conn.run('PRAGMA busy_timeout = 10000;');
+        },
+      },
+    })
+  : new Sequelize(DATABASE_URL, {
+      dialect: 'postgres',
+      protocol: 'postgres',
+      logging: false,
+      dialectOptions: {
+        ssl: {
+          require: true,
+          rejectUnauthorized: !isRailway,
+        },
+      },
+    });
+
 module.exports = {
   VERSION: require('./package.json').version,
   SESSION_ID: (process.env.SESSION_ID || '').trim(),
-  DATABASE:
-    DATABASE_URL === databasePath
-      ? new Sequelize({
-        dialect: 'sqlite',
-        storage: DATABASE_URL,
-        logging: false,
-        retry: {
-          max: 10,
-        },
-        pool: {
-          max: 5,
-          min: 0,
-          acquire: 30000,
-          idle: 10000,
-        },
-        dialectOptions: {
-          busyTimeout: 10000,
-        },
-        hooks: {
-          afterConnect: (conn) => {
-            conn.run('PRAGMA synchronous = NORMAL;')
-            conn.run('PRAGMA busy_timeout = 10000;')
-          },
-        },
-      })
-      : new Sequelize(DATABASE_URL, {
-        dialect: 'postgres',
-        protocol: 'postgres',
-        dialectOptions: {
-          ssl: { require: true, rejectUnauthorized: false },
-          keepAlive: true,
-        },
-        logging: false,
-        retry: { max: 10 },
-        pool: {
-          max: 5,
-          min: 0,
-          acquire: 30000,
-          idle: 10000,
-          evict: 10000,
-        },
-      }),
+  DATABASE,
   PREFIX: (process.env.PREFIX || '^[.,!]').trim(),
   SUDO: process.env.SUDO || '',
   HEROKU_APP_NAME: process.env.HEROKU_APP_NAME,
@@ -89,11 +86,8 @@ module.exports = {
   DISABLE_START_MESSAGE: process.env.DISABLE_START_MESSAGE || 'false',
   ANTI_BOT: (process.env.ANTI_BOT || 'off').trim(),
   ANTI_BOT_MESSAGE: process.env.ANTI_BOT_MESSAGE || '&mention removed',
-  WARN_MESSAGE:
-    process.env.WARN_MESSAGE ||
-    '⚠️WARNING⚠️\n*User :* &mention\n*Warn :* &warn\n*Remaining :* &remaining',
-  WARN_RESET_MESSAGE:
-    process.env.WARN_RESET_MESSAGE || `WARN RESET\nUser : &mention\nRemaining : &remaining`,
+  WARN_MESSAGE: process.env.WARN_MESSAGE || '⚠️WARNING⚠️\n*User :* &mention\n*Warn :* &warn\n*Remaining :* &remaining',
+  WARN_RESET_MESSAGE: process.env.WARN_RESET_MESSAGE || 'WARN RESET\nUser : &mention\nRemaining : &remaining',
   WARN_KICK_MESSAGE: process.env.WARN_KICK_MESSAGE || '&mention kicked',
   TRUECALLER: process.env.TRUECALLER,
   DELETE_TYPE: (process.env.DELETE_TYPE || '').trim(),
@@ -112,4 +106,4 @@ module.exports = {
   YT_COOKIE: process.env.YT_COOKIE,
   GROQ_MODEL: (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim(),
   GROQ_API_KEY: (process.env.GROQ_API_KEY || '').trim(),
-}
+};
