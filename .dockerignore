@@ -6,6 +6,4 @@ database.db
 *.sqlite
 temp/
 tmp/
-.git/objects
-.git/refs
-.git/index
+.git
