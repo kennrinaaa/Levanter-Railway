@@ -1,0 +1,11 @@
+node_modules
+*.log
+.env
+config.env
+database.db
+*.sqlite
+temp/
+tmp/
+.git/objects
+.git/refs
+.git/index
