@@ -2,7 +2,7 @@ const { Sequelize } = require('sequelize');
 const { existsSync } = require('fs');
 const path = require('path');
 
-// Load config.env if it exists
+// Load config.env if it exists (for local dev)
 const configPath = path.join(__dirname, './config.env');
 if (existsSync(configPath)) require('dotenv').config({ path: configPath });
 
@@ -13,37 +13,42 @@ const toBool = (x) => x === 'true';
 const isRailway = process.env.RAILWAY_ENVIRONMENT === 'production' ||
                   (process.env.RAILWAY_PUBLIC_DOMAIN || '').includes('.railway.app');
 
-// Database setup
-const DATABASE_URL = process.env.DATABASE_URL === undefined
-  ? databasePath
-  : process.env.DATABASE_URL;
+// ------------------------------------------------------------------
+// FIXED: Database setup with proper null/empty URL handling
+// ------------------------------------------------------------------
+const rawDbUrl = process.env.DATABASE_URL || '';
 
-const DATABASE = DATABASE_URL === databasePath
-  ? new Sequelize({
-      dialect: 'sqlite',
-      storage: DATABASE_URL,
-      logging: false,
-      retry: { max: 10 },
-      pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
-      dialectOptions: { busyTimeout: 10000 },
-      hooks: {
-        afterConnect: (conn) => {
-          conn.run('PRAGMA synchronous = NORMAL;');
-          conn.run('PRAGMA busy_timeout = 10000;');
-        },
+let DATABASE;
+if (rawDbUrl && rawDbUrl.trim() !== '' && rawDbUrl.startsWith('postgres')) {
+  // PostgreSQL (Railway)
+  DATABASE = new Sequelize(rawDbUrl, {
+    dialect: 'postgres',
+    protocol: 'postgres',
+    logging: false,
+    dialectOptions: {
+      ssl: {
+        require: true,
+        rejectUnauthorized: !isRailway,
       },
-    })
-  : new Sequelize(DATABASE_URL, {
-      dialect: 'postgres',
-      protocol: 'postgres',
-      logging: false,
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: !isRailway,
-        },
+    },
+  });
+} else {
+  // SQLite fallback (local dev or no DATABASE_URL set)
+  DATABASE = new Sequelize({
+    dialect: 'sqlite',
+    storage: databasePath,
+    logging: false,
+    retry: { max: 10 },
+    pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
+    dialectOptions: { busyTimeout: 10000 },
+    hooks: {
+      afterConnect: (conn) => {
+        conn.run('PRAGMA synchronous = NORMAL;');
+        conn.run('PRAGMA busy_timeout = 10000;');
       },
-    });
+    },
+  });
+}
 
 module.exports = {
   VERSION: require('./package.json').version,
