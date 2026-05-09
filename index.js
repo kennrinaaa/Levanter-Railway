@@ -4,14 +4,11 @@ const http = require('http');
 
 // ------------------------------------------------------------------
 // GLOBAL: Suppress simple-git errors caused by missing .git folder
-// These happen because Railway/Docker doesn't include the .git directory
 // ------------------------------------------------------------------
 process.on('unhandledRejection', (reason) => {
   if (reason && reason.message && reason.message.includes('not a git repository')) {
-    // Silently ignore git-related errors
-    return;
+    return; // Silently ignore git errors
   }
-  // Log anything else but don't crash
   logger.warn({ err: reason }, 'Unhandled rejection (non-git)');
 });
 
@@ -24,7 +21,7 @@ process.on('uncaughtException', (err) => {
 });
 
 // ------------------------------------------------------------------
-// Helper: Start server with port-fallback
+// Health server with port-fallback
 // ------------------------------------------------------------------
 const startServer = (port) => {
   const server = http.createServer((req, res) => {
@@ -53,7 +50,6 @@ const startServer = (port) => {
   return server;
 };
 
-// Start health server
 const PORT = parseInt(process.env.PORT || '3000', 10);
 startServer(PORT);
 
@@ -63,15 +59,11 @@ startServer(PORT);
 const start = async () => {
   logger.info(`Levanter ${VERSION}`);
 
-  // Test database connection
   try {
     await DATABASE.authenticate({ retry: { max: 3 } });
     logger.info('Database connected');
   } catch (error) {
-    logger.error({
-      msg: 'Database connection failed',
-      error: error.message,
-    });
+    logger.error({ msg: 'Database connection failed', error: error.message });
     process.exit(1);
   }
 
@@ -100,9 +92,6 @@ const shutdown = async (bot) => {
   }
 };
 
-// ------------------------------------------------------------------
-// Entry point
-// ------------------------------------------------------------------
 const init = async () => {
   const bot = await start();
   process.on('SIGINT', () => shutdown(bot));
